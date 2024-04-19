@@ -11,17 +11,22 @@ mur = api.mur_init()
 '''colors = {
     'orange':   np.array([[15,  50,  50], [30, 255, 255]]),
     'dark_red': np.array([[175, 200,  95], [255, 255, 255]]),
-    'black': np.array([[0, 0, 0], [255, 255, 255]])
+    'black': np.array([[0, 0, 0], [255, 255, 255]]),
+    'green': np.array([[65, 70, 51], [121, 255, 255]]),
+    'purple': np.array([[0, 70, 51], [140, 255, 255]]),
+    'yellow': np.array([[0, 70, 51], [58, 255, 255]])
 }'''
 
 colors = {
     'orange':   ((15,  50,  50), ( 30, 255, 255)),
     'dark_red': ((175, 200,  95), (255, 255, 255)),
     'black': ((0, 0, 0), (255, 255, 25)),
-    'red': ((), ())
+    'green': ((65, 70, 51), (121, 255, 255)),
+    'purple': ((0, 70, 51), (140, 255, 255)),
+    'yellow': ((0, 70, 51), (58, 255, 255))
 }
 
-MY_COLOR = 'dark_red'
+MY_COLOR_TRUBA = 'purple'
 
 # разрешение камер
 cam_w = 320
@@ -468,9 +473,11 @@ def find_contours(image, color_low, color_high, approx = cv.CHAIN_APPROX_SIMPLE)
     mask = cv.inRange(hsv_image, color_low, color_high)
     #print("working")
     cv.imshow('result', mask)
-    cv.waitKey(30)
+    cv.waitKey(3000)
     contours, _ = cv.findContours(mask, cv.RETR_EXTERNAL, approx)
     return contours
+
+ 
 
 
 def Roma_stabilize_on_circle():
@@ -510,19 +517,34 @@ def Roma_go_deep():
         #Roma_look_for_picture()
     else:
         return True
-        
+   
+
+def go_by_truba():
+    image = mur.get_image_bottom()
+    contours = find_contours(image, colors[MY_COLOR_TRUBA][0], colors[MY_COLOR_TRUBA][1], cv.CHAIN_APPROX_SIMPLE)
+    a = find_rectangle_contour_angle(contours)
+    print(a)
+    context.set_yaw(a)
+    context.set_speed(10)
+    return True
+     
 # основной код программы
 if __name__ == "__main__":
-    context.set_depth(0.3)
+
+    context.set_depth(3.0)
     context.set_yaw(0.0)
+         
     ######cv.namedWindow("result")
 
     # определим подзадачи, которые требуется решить
 
     initial_position = (
         wait,
+        go_by_truba,
+        wait,
+        go_by_truba
        #     surface_20cm,
-        turn_to_wall,
+       # turn_to_wall,
 #        wait,
 #        stop,
 #        stabilize,
@@ -531,9 +553,10 @@ if __name__ == "__main__":
 #        wait,
         #Roma_look_for_picture,
         #Roma_go_deep,
-        Roma_stabilize_on_circle,
-        wait,
-        go_side,
+        #Roma_stabilize_on_circle,
+        #wait,
+        #go_side,
+        
        
     )
 
@@ -560,13 +583,14 @@ if __name__ == "__main__":
     # основной цикл программы, где выполняются все определенные задачи
     while (True):
         mission = context.pop_mission()
-        print('starting', mission.__name__, '[{}]'.format(context.time))
+        #print('starting', mission.__name__, '[{}]'.format(context.time))
         while not mission():
+            #go_by_truba()
             context.process()
             context.time += 1
 
-        if context.get_missions_length() == 0:
-            break
+        #if context.get_missions_length() == 0:
+            #break
 
     print("done!")
 
@@ -575,4 +599,3 @@ if __name__ == "__main__":
 
     time.sleep(3)
     
-       
