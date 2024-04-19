@@ -8,23 +8,13 @@ mur = api.mur_init()
 
 # предопределенные диапазоны цветов в формате HSV
 
-'''colors = {
-    'orange':   np.array([[15,  50,  50], [30, 255, 255]]),
-    'dark_red': np.array([[175, 200,  95], [255, 255, 255]]),
-    'black': np.array([[0, 0, 0], [255, 255, 255]]),
-    'green': np.array([[65, 70, 51], [121, 255, 255]]),
-    'purple': np.array([[0, 70, 51], [140, 255, 255]]),
-    'yellow': np.array([[0, 70, 51], [58, 255, 255]])
-}'''
-
 colors = {
     'orange':   ((15,  50,  50), ( 30, 255, 255)),
     'dark_red': ((175, 200,  95), (255, 255, 255)),
     'black': ((0, 0, 0), (255, 255, 25)),
     'green': ((65, 70, 41), (121, 255, 255)),
-    'purple': ((0, 70, 51), (140, 255, 255)),
-    'yellow': ((0, 70, 51), (58, 255, 255)),
-    'korzina': ((0, 70, 51), (121, 255, 255))
+    'purple': ((0, 70, 0), (140, 255, 255)),
+    'yellow': ((0, 70, 51), (58, 255, 255))
 }
 
 MY_COLOR_TRUBA = 'purple'
@@ -35,7 +25,11 @@ MY_COLOR_YELLOW = 'yellow'
 cam_w = 320
 cam_h = 240
 
-count_of_korzinas_alarms = 0
+
+    
+counter_of_korz = 0 
+
+flag = False
 
 # функция для ограничения значения диапазоном
 def clamp(value, min_value, max_value):
@@ -78,7 +72,7 @@ class PDRegulator(object):
             return 0
 
         output = self._p_gain * error + self._d_gain / (timestamp - self._timestamp) * (error - self._prev_error)
-        #print("output = ", output)
+        
         self._timestamp = timestamp
         self._prev_error = error
         return output
@@ -229,20 +223,6 @@ class AUVContext(object):
 # объект, где будет хранится текущее состояние
 context = AUVContext()
 
-# стабилизировать курс и глубину
-def stabilize():
-    yaw = mur.get_yaw()
-    depth = mur.get_depth()
-
-    if abs(yaw - context.get_yaw()) < 1 and abs(depth - context.get_depth()) < 0.4:
-        # продолжать корректировать курс, пока не будут
-        # достигнуты приемлемые значения
-        if context.check_stabilization(timeout=5):
-            return True
-    else:
-        context.reset_stabilization_counter()
-    return False
-
 # расчёт угла относительно прямоугольника
 # для определение отклонения от полоски,
 # чтобы затем скорректировать курс
@@ -260,116 +240,9 @@ def find_rectangle_contour_angle(contour):
     angle = -((180.0 / math.pi * math.acos(edge[0] / (cv.norm((1, 0)) * cv.norm(edge)))) - 90)
     return angle
 
-# расчёт угла относительно стрелки,
-# чтобы затем скорректировать курс
-def detect_arrow_angle(image, contour):
-    (arrow_center_x, arrow_center_y), radius = cv.minEnclosingCircle(contour)
-    moments = cv.moments(contour)
-
-    to_draw = image.copy()
-    
-    cv.circle(to_draw, (int(arrow_center_x), int(arrow_center_y)), 1, (255, 0, 255), 2)
-    cv.circle(to_draw, (int(arrow_center_x), int(arrow_center_y)), int(radius), (255, 0, 255), 2)
-
-    try:
-        arrow_direction_x = moments['m10'] / moments['m00']
-        arrow_direction_y = moments['m01'] / moments['m00']
-
-        arrow_angle = (angle_between((arrow_direction_x, arrow_direction_y), (arrow_center_x, arrow_center_y)))
-        context.set_yaw(mur.get_yaw() + arrow_angle)
-
-        target_x = arrow_center_x - (cam_w / 2)
-        target_y = arrow_center_y - (cam_h / 2)
-        length = math.sqrt(target_x ** 2 + target_y ** 2)
-
-        return arrow_angle, target_x, target_y, length
-    except:
-        return False, False, False, False
-
-
-# стабилизироваться по точке изображения,
-# здесь координата y - глубина  _bottom
-def stabilize_x_y_bottom(x, y):
-    y_center = y - (cam_h / 2)
-    x_center = x - (cam_w / 2)
-    
-
-    try:
-        length = math.sqrt(x_center ** 2 + y_center ** 2)
-        if length < 3.5:
-            if context.check_stabilization(timeout=4):
-                #mur.drop()                                                             ---------добавить дроп
-                print("droped")
-                return True
-        else:
-            context.reset_stabilization_counter()
-
-        output_forward = stabilize_x_y.side_regulator.process(y_center)
-        output_side = stabilize_x_y.side_regulator.process(x_center)
-        output_forward = clamp(output_forward, -50, 50)
-        output_side = clamp(output_side, -50, 50)
-        context.set_speed_forward(-output_forward)
-        context.set_speed_side(-output_side)
-        
-    except AttributeError:
-        stabilize_x_y.side_regulator = PDRegulator()
-        stabilize_x_y.side_regulator.set_p_gain(0.5)
-        stabilize_x_y.side_regulator.set_d_gain(0.1)
-
-        stabilize_x_y.depth_regulator = PDRegulator()
-        stabilize_x_y.depth_regulator.set_p_gain(0.01)
-        stabilize_x_y.depth_regulator.set_d_gain(0.01)
-    return False
-    
-        
 
 
 
-def stabilize_x_y(x, y):
-    y_center = y - (cam_h / 2)
-    x_center = x - (cam_w / 2)
-
-    try:
-        length = math.sqrt(x_center ** 2 + y_center ** 2)
-        if length < 3.5:
-            if context.check_stabilization(timeout=2):
-                return True
-        else:
-            context.reset_stabilization_counter()
-
-        output_side = stabilize_x_y.side_regulator.process(x_center)
-        output_depth = stabilize_x_y.depth_regulator.process(y_center)
-
-        output_side = clamp(int(output_side), -50, 50)
-        output_depth = clamp(output_depth, -1, 1)
-
-        context.set_side_speed(-output_side)
-        context.set_depth(mur.get_depth() + output_depth)
-
-    except AttributeError:
-        stabilize_x_y.side_regulator = PDRegulator()
-        stabilize_x_y.side_regulator.set_p_gain(0.5)
-        stabilize_x_y.side_regulator.set_d_gain(0.1)
-
-        stabilize_x_y.depth_regulator = PDRegulator()
-        stabilize_x_y.depth_regulator.set_p_gain(0.01)
-        stabilize_x_y.depth_regulator.set_d_gain(0.01)
-    return False
-
-# стабилизация глубины
-def stabilize_y(y):
-    y_center = y - (cam_h / 2)
-    try:
-        output_depth = stabilize_y.depth_regulator.process(y_center)
-        output_depth = clamp(context.get_depth() + output_depth, 0, 3)
-        context.set_depth(output_depth)
-    except AttributeError:
-        stabilize_y.depth_regulator = PDRegulator()
-        stabilize_y.depth_regulator.set_p_gain(0.00002)
-        stabilize_y.depth_regulator.set_d_gain(0.00002)
-
-# функции для управления автоматической стабилизацией.
-# это полезно при полностью ручном управлении моторами
 
 def auto_stabilization_on():
     context.set_auto_stabilization(True)
@@ -378,29 +251,7 @@ def auto_stabilization_on():
 def auto_stabilization_off():
     context.set_auto_stabilization(False)
     return True
-
-# двигаться вперёд
-#def go_forward():
-#    if (context.get_speed() != 30):
-#        context.set_speed(30)
-#        time.sleep(1)
-#        return False
-#    else:
-#        return True
-#
-# двигаться назад
-#def go_back():
-#    if (context.get_speed() != -30):
-#        context.set_speed(-30)
-#        return False
-#    else:
-#        return True
-#
-# двигаться лагом (боком)
-#def go_side():
-#    context.set_side_speed(-50)
-#    return True
-#
+    
 def wait_timeout(seconds=3):
     timeout = time.time() + seconds
     while True:
@@ -413,10 +264,11 @@ def wait_timeout(seconds=3):
 def wait_short():
     wait_timeout(2)
     return True
-    
-def wait_short_2():
-    wait_timeout(3.1)
+
+def wait_short_3():
+    wait_timeout(0.5)
     return True
+    
 
 def wait():
     wait_timeout(4.25)
@@ -434,97 +286,7 @@ def stop():
         mur.set_motor_power(motor, 0)
     return True
 
-# всплыть на поверхность
-#def surface():
-#    context.set_depth(0)
-#    mur.set_motor_power(2, 50)
-#    mur.set_motor_power(3, 50)
-#    time.sleep(5)
-#    return True
-#
-#
-# повернуться к стене
-#def turn_to_wall():
-#    if (context.get_yaw() != -90):
-#        context.set_yaw(-90)
-#        return False
-#    else:
-#        return True
-#        
-# определение формы объекта заданного цвета
-#def detect_shape(image, color, stabilization):
-#def detect_shape(image, color):
-#    # функция сортировки контуров по х координате. Обработанный конур ставит на последнее место
-#    def sort_by_x_pos(cnt):
-#        (x, y), _ = cv.minEnclosingCircle(cnt)
-#        target_x = x - context.old_shape['position'][0]
-#        target_y = y - context.old_shape['position'][1]
-#        length = math.sqrt(target_x ** 2 + target_y ** 2)
-#        context.old_shape['position'] = (x, y)        
-#        if (length < 10): 
-#            if(True): # в режиме стабилизации ставим контур первым в списке
-#                if(context.old_shape['direction'] == "right"):
-#                    return 0
-#                else:
-#                    return cam_w
-#            else: # исключаем уже отработанный контур, поставив его в конец списка
-#                if(context.old_shape['direction'] == "right"): 
-#                    return cam_w
-#                else:
-#                    return 0            
-#        return x
-#        
-#    image_c = image
-#    contours = find_contours(image, color[0], color[1])
-#
-#    biggest_shape = None
-#    biggest_shape_pos = (0, 0)
-#    biggest_area = 0
-#
-#    if contours:
-#        if(context.old_shape['direction'] == "right"):
-#            rev = False
-#        else:
-#             rev = True
-#        contours = sorted(contours, key=sort_by_x_pos, reverse=rev)
-#        contours= contours[:1]
-##        for i in range(1, len(contours)):
-##              contours.pop(i)
-#        for contour_in_for in contours:
-#            tag_area = cv.contourArea(contour_in_for)
-#            
-#            if (tag_area > 100) and (tag_area > biggest_area): # не определяем форму, пока площадь контура растет
-#                biggest_area = tag_area
-#                contour = contour_in_for
-#        
-#        (circle_x, circle_y), circle_radius = cv.minEnclosingCircle(contour)
-#            
-#         
-#        cv.drawContours(image_c, contour, 0, (0,0,0),5)
-#        cv.imshow('result sphere', image_c) 
-#        cv.waitKey(2)
-#        circle_area = circle_radius ** 2 * math.pi
-#        
-#        areas = {
-#            'circle': circle_radius ** 2 * math.pi,
-#            'rect': cv.contourArea(box),
-#            'triangle': cv.contourArea(triangle),
-#        }
-##    
-##            tag_shapes = list(areas.keys())
-##            shapes_areas = np.array(list(areas.values()))
-##            difference = abs(shapes_areas - tag_area)
-##            arg = np.argmin(difference)
-##            biggest_shape = tag_shapes[arg]
-##            if biggest_shape == 'rect' and  abs(1.0 - aspect_ratio) < 0.1:
-##                biggest_shape = 'square'
-#
-#        biggest_shape_pos = (circle_x, circle_y)
-#
-#    if not biggest_shape is None:
-#        return biggest_shape, biggest_shape_pos
-#    else:
-#        return False, False
+
 def detect_shape(contours):
 
     biggest_shape = None
@@ -542,36 +304,7 @@ def detect_shape(contours):
         if not contour is None:       
             (circle_x, circle_y), circle_radius = cv.minEnclosingCircle(contour)
             circle_area = circle_radius ** 2 * math.pi
-
-#        rectangle = cv.minAreaRect(contour)
-#        box = cv.boxPoints(rectangle)
-#        box = np.int0(box)
-#        rectangle_area = cv.contourArea(box)
-#        rect_w = rectangle[1][0]
-#        rect_h = rectangle[1][1]
-#        aspect_ratio = max(rect_w, rect_h) / min(rect_w, rect_h)
-#
-#        triangle = cv.minEnclosingTriangle(contour)[1]
-#        triangle = np.int0(triangle)
-#        triangle_area = cv.contourArea(triangle)
-#
-#        areas = {
-#            'circle': circle_radius ** 2 * math.pi,
-#            'rect': cv.contourArea(box),
-#            'triangle': cv.contourArea(triangle),
-#        }
-
-#        tag_shapes = list(areas.keys())
-#        shapes_areas = np.array(list(areas.values()))
-#        difference = abs(shapes_areas - tag_area)
-#        arg = np.argmin(difference)
-#        biggest_shape = tag_shapes[arg]
-#        if biggest_shape == 'rect' and  abs(1.0 - aspect_ratio) < 0.1:
-#            biggest_shape = 'square'
-#        if abs(cv.contourArea(contour) - circle_area) > 8000:
-#            biggest_shape = 'square'
-#        else:
-#           
+            
             biggest_shape = 'circle'
             
             biggest_shape_pos = (circle_x, circle_y)
@@ -594,9 +327,6 @@ def detect_area_shape(contours):
             if (tag_area > 100) and (tag_area > biggest_area):
                 biggest_area = tag_area
                 contour = contour_1
-                
-        #(circle_x, circle_y), circle_radius = cv.minEnclosingCircle(contour)
-        #circle_area = circle_radius ** 2 * math.pi
         
         area = cv.contourArea(contour)
         
@@ -607,28 +337,6 @@ def detect_area_shape(contours):
         return 0
         
         
-# функции для стабилизации по определенной фигуре
-
-#def stabilize_on_shape(target_shape):
-#    while True:
-#        shape, pos = detect_shape(mur.get_image_front(),colors[MY_COLOR])
-#        if shape == target_shape:
-#            if not stabilize_x_y(pos[0], pos[1]):
-#                context.process()
-#                context.time += 1
-#            else:
-#                return True
-#
-#def stabilize_on_circle():
-#    return stabilize_on_shape('circle')
-#
-#def stabilize_on_triangle():
-#    return stabilize_on_shape('triangle')
-#
-#def stabilize_on_square():
-#    return stabilize_on_shape('square')
-
-
 
 # цикл выполнения подзадач
 
@@ -639,9 +347,6 @@ def do_loop_task(tasks):
             context.process()
             context.time += 1
 
-'''
-для более точного определения объектов, форма будет определяться не по одному кадру, а по присутствию фигуры на нескольких кадрах подряд. данный словарь хранит последнюю фигуру, которая была определена, а также количество кадров, в течении которых она наблюдалась.
-'''
 
 context.shape_counter = {
     'shape': None,
@@ -649,90 +354,20 @@ context.shape_counter = {
 }
 
 # поиск фигур
-def Roma_look_for_picture(korzina_mask):
+def Detect_korzina(korzina_mask):
     shape, pos = detect_shape(korzina_mask)
 
-#    if shape and abs(cam_w - pos[0]) < 120:
-#        stabilize_y(pos[1])
-#
-#    if shape and abs(cam_w/2 - pos[0]) < 50:
-#        if context.shape_counter['shape'] == shape:
-#            context.shape_counter['counter'] += 1
-#        else:
-#            context.shape_counter['counter'] = 0
-#
-#        context.shape_counter['shape'] = shape
-#
-#    if context.shape_counter['counter'] >= 15:
-#        print('found', shape)
-#        context.shape_counter['counter'] = 0
-#        if shape == 'circle':
-#            Roma_stabilize_on_circle(color)
-#            print('circle')
+
     if shape == 'circle':
         return True
 
     return False
-#
-#def Roma_look_for_picture_yellow(korzina_mask):
-#    shape, pos = detect_shape(korzina_mask)
-#
-#    if shape and abs(cam_w - pos[0]) < 120:
-#        stabilize_y(pos[1])
-#
-#    if shape and abs(cam_w/2 - pos[0]) < 50:
-#        if context.shape_counter['shape'] == shape:
-#            context.shape_counter['counter'] += 1
-#        else:
-#            context.shape_counter['counter'] = 0
-#
-#        context.shape_counter['shape'] = shape
-#
-#    if context.shape_counter['counter'] >= 15:
-#        print('found', shape)
-#        context.shape_counter['counter'] = 0
-#        if shape == 'circle':
-#            Roma_stabilize_on_circle(color)
-#            print('circle')
-#            return True
-#      
-#
-#    return False
-#    
-#def Roma_look_for_picture_green(korzina_mask):
-#    shape, pos = detect_shape(korzina_mask)
-#
-#    if shape and abs(cam_w - pos[0]) < 120:
-#        stabilize_y(pos[1])
-#
-#    if shape and abs(cam_w/2 - pos[0]) < 50:
-#        if context.shape_counter['shape'] == shape:
-#            context.shape_counter['counter'] += 1
-#        else:
-#            context.shape_counter['counter'] = 0
-#
-#        context.shape_counter['shape'] = shape
-#
-#    if context.shape_counter['counter'] >= 15:
-#        print('found', shape)
-#        context.shape_counter['counter'] = 0
-#        if shape == 'circle':
-#            Roma_stabilize_on_circle(color)
-#            print('circle')
-#            return True
-#            
-#
-#    return False
-############################################
-
+    
 
 # поиск на изображении контура по цвету
 def find_contours(image, color_low, color_high, approx = cv.CHAIN_APPROX_SIMPLE):
     hsv_image = cv.cvtColor(image, cv.COLOR_BGR2HSV)
     mask = cv.inRange(hsv_image, color_low, color_high)
-    #print("working")
-    #cv.imshow('result', mask)
-    #cv.waitKey(3)
     contours, _ = cv.findContours(mask, cv.RETR_EXTERNAL, approx)
     area = 0
     if contours:
@@ -740,87 +375,8 @@ def find_contours(image, color_low, color_high, approx = cv.CHAIN_APPROX_SIMPLE)
             area += cv.contourArea(contour)
     return contours, area
 
- 
 
-
-#def Roma_stabilize_on_circle():
-#    image = mur.get_image_front()
-#    contours, _ = find_contours(image, colors[MY_COLOR][0], colors[MY_COLOR][1], cv.CHAIN_APPROX_SIMPLE)
-#    biggest_shape = None
-#    biggest_shape_pos = (0, 0)
-#    biggest_area = 0
-#    if contours:
-#        for contour in contours:
-#            area = cv.contourArea(contour)
-#            length = cv.arcLength(contour, True)
-#
-#            if (area < 250):
-#                continue
-#            
-#            (circle_x, circle_y), circle_radius = cv.minEnclosingCircle(contour)
-#            circle_area = circle_radius ** 2 * math.pi
-#            circle_length = circle_radius * 2 * math.pi
-#
-#            #print("area=",area," circle_area=",circle_area," length=",length," circle_length=",circle_length)
-#            if abs(area/circle_area - 1) < 0.05 and abs(length/circle_length - 1) < 0.05:
-#                #print("Found Circle !")
-#                return stabilize_x_y_bottom(circle_x, circle_y)
-#                
-#    return False
-#
-#def Roma_stabilize_on_circle__yellow(yellow_mask):
-#    contours = yellow_mask
-#    biggest_shape = None
-#    biggest_shape_pos = (0, 0)
-#    biggest_area = 0
-#    if contours:
-#        for contour_1 in contours:
-#            tag_area = cv.contourArea(contour_1)
-#
-#            if (tag_area > 200) and (tag_area > biggest_area):
-#                biggest_area = tag_area
-#                contour = contour_1
-#        if not contour is None:       
-#            
-#            (circle_x, circle_y), circle_radius = cv.minEnclosingCircle(contour)
-#            circle_area = circle_radius ** 2 * math.pi
-#            circle_length = circle_radius * 2 * math.pi
-#
-#            #print("area=",area," circle_area=",circle_area," length=",length," circle_length=",circle_length)
-#            #if abs(area/circle_area - 1) < 0.05 and abs(length/circle_length - 1) < 0.05:
-#            print("Found yellow Circle !")
-#            return stabilize_x_y_bottom(circle_x, circle_y)
-#                
-#    return False
-    
-#def Roma_stabilize_on_circle__green(green_mask):
-#    contours = green_mask
-#    biggest_shape = None
-#    biggest_shape_pos = (0, 0)
-#    biggest_area = 0
-#    if contours:
-#        for contour_1 in contours:
-#            tag_area = cv.contourArea(contour_1)
-#
-#            if (tag_area > 200) and (tag_area > biggest_area):
-#                biggest_area = tag_area
-#                contour = contour_1
-#        if not contour is None:       
-#            
-#            (circle_x, circle_y), circle_radius = cv.minEnclosingCircle(contour)
-#            circle_area = circle_radius ** 2 * math.pi
-#            circle_length = circle_radius * 2 * math.pi
-#
-#            #print("area=",area," circle_area=",circle_area," length=",length," circle_length=",circle_length)
-#            #if abs(area/circle_area - 1) < 0.05 and abs(length/circle_length - 1) < 0.05:
-#            print("Found green Circle !")
-#            return stabilize_x_y_bottom(circle_x, circle_y)
-#      
-#    return False
-
-
-def find_red_figure(korzina_mask):
-#    global final
+def find_coordinates(korzina_mask):
 
     image_hsv = cv.cvtColor(mur.get_image_bottom(), cv.COLOR_BGR2HSV)
     lower_green = colors[MY_COLOR_GREEN][0]
@@ -845,9 +401,7 @@ def find_red_figure(korzina_mask):
             aspect_ratio = w / h
             cv.drawContours(image_bin, cnt, 0, (255,0,0),2) # рисуем прямоугольник
             cv.circle(image_bin, (int(x1), int(y1)), 5, (255,0,0), 2) # рисуем маленький кружок в центре прямоугольника
-            #cv.imshow("Image", image_bin)
-            #cv.waitKey(500)
-#            if final._last_area >= area+3:
+       
             if 0.9 <= aspect_ratio <= 1.1:
                 moments = cv.moments(cnt)
                 try:
@@ -859,94 +413,78 @@ def find_red_figure(korzina_mask):
                     return True, x, y, len(contours)
                 else:
                     return True, x, y, len(contours)
-#                else:
-#                    return True, TRIANGLE, x1, y1, len(contours)
-#            else:
-#                final._last_area = area
+                    
     return False, 0, 0, 0
 
-def stab_on_yellow_circlenot_bomb(korzina_mask):
-    found, x, y, _ = find_red_figure(korzina_mask)
+def stab_on_circle_not_bomb(korzina_mask):
+    found, x, y, _ = find_coordinates(korzina_mask)
     if found:
         x_center = x - (320 / 2)
         y_center = y + 20 - (240 / 2)
-        try:
-            length = math.sqrt(x_center ** 2 + y_center ** 2)
-            if length < 10.0:
-                #print("Стабилизация - ", round(time.time() - startTime), "секунды ")
-                print("стабилизировался")
-                return True
-            output_forward = stab_on_yellow_circle.regulator_forward.process(y_center)
-            output_side = stab_on_yellow_circle.regulator_side.process(x_center)
-            output_forward = clamp(output_forward, -50, 50)
-            output_side = clamp(output_side, -50, 50)
-            context.set_speed(-output_forward)
-            context.set_side_speed(-output_side)
-        except AttributeError:
-            stab_on_yellow_circle.regulator_forward = PDRegulator()
-            stab_on_yellow_circle.regulator_forward.set_p_gain(0.2)  # было 0.8
-            stab_on_yellow_circle.regulator_forward.set_d_gain(0.5)
-
-            stab_on_yellow_circle.regulator_side = PDRegulator()
-            stab_on_yellow_circle.regulator_side.set_p_gain(0.2)  # было 0.8
-            stab_on_yellow_circle.regulator_side.set_d_gain(0.5)
+        length = math.sqrt(x_center ** 2 + y_center ** 2)
+        if length < 10.0:
+            print("разворот")
+            return True
+        output_forward = stab_on_circle.regulator_forward.process(y_center)
+        output_side = stab_on_circle.regulator_side.process(x_center)
+        output_forward = clamp(output_forward, -50, 50)
+        output_side = clamp(output_side, -50, 50)
+        context.set_speed(-output_forward)
+        context.set_side_speed(-output_side)
 
     return False
 
-def stab_on_yellow_circle(korzina_mask):
-    found, x, y, _ = find_red_figure(korzina_mask)
+def stab_on_circle(korzina_mask):
+    found, x, y, _ = find_coordinates(korzina_mask)
     if found:
         x_center = x - (320 / 2)
         y_center = y + 20 - (240 / 2)
         try:
             length = math.sqrt(x_center ** 2 + y_center ** 2)
-            if length < 10.0:
-                #print("Стабилизация - ", round(time.time() - startTime), "секунды ")
+            cur_speed = context.get_speed()
+            if length < 10.0 and (-5 <= cur_speed <= 5):
                 print("стабилизировался")
                 mur.drop()
                 return True
-            output_forward = stab_on_yellow_circle.regulator_forward.process(y_center)
-            output_side = stab_on_yellow_circle.regulator_side.process(x_center)
+            output_forward = stab_on_circle.regulator_forward.process(y_center)
+            output_side = stab_on_circle.regulator_side.process(x_center)
             output_forward = clamp(output_forward, -50, 50)
             output_side = clamp(output_side, -50, 50)
             context.set_speed(-output_forward)
             context.set_side_speed(-output_side)
         except AttributeError:
-            stab_on_yellow_circle.regulator_forward = PDRegulator()
-            stab_on_yellow_circle.regulator_forward.set_p_gain(0.2)  # было 0.8
-            stab_on_yellow_circle.regulator_forward.set_d_gain(0.5)
+            stab_on_circle.regulator_forward = PDRegulator()
+            stab_on_circle.regulator_forward.set_p_gain(0.2)  # было 0.8
+            stab_on_circle.regulator_forward.set_d_gain(0.5)
 
-            stab_on_yellow_circle.regulator_side = PDRegulator()
-            stab_on_yellow_circle.regulator_side.set_p_gain(0.2)  # было 0.8
-            stab_on_yellow_circle.regulator_side.set_d_gain(0.5)
+            stab_on_circle.regulator_side = PDRegulator()
+            stab_on_circle.regulator_side.set_p_gain(0.2)  # было 0.8
+            stab_on_circle.regulator_side.set_d_gain(0.5)
 
     return False
-#
-#def Roma_go_deep():
-#    if mur.get_depth() < 2.5:
-#        d = mur.get_depth() + 0.3
-#        context.set_depth(d)
-#        return Roma_stabilize_on_circle()
-#        #Roma_look_for_picture()
-#    else:
-#        return True
-#
-#def text(korzina_mask):
-#    return stab_on_yellow_circle(korzina_mask)
     
-counter_of_korz = 0 
+
+def side_correct_movement(contour):
     
-def Identefite_picture(green_mask, yellow_mask):
-    global counter_of_korz
-    if detect_area_shape(green_mask) > detect_area_shape(yellow_mask):
-        counter_of_korz +=1
-        print('green')
-    elif detect_area_shape(green_mask) < detect_area_shape(yellow_mask):
-        counter_of_korz +=2
-        print('yellow')
-    print(counter_of_korz)
+    ((x, _), (_, _), _) = cv.minAreaRect(contour)
+    x_center = (cam_w / 2)
+    x_res = (x_center - x)
+    try:
+        output_side = side_correct_movement.regulator_side.process(x_res)
+        output_side = clamp(output_side, -50, 50)
+        #print(output_side)
+        context.set_side_speed(output_side)
         
-flag = False
+    except AttributeError:
+        
+        side_correct_movement.regulator_side = PDRegulator()
+        side_correct_movement.regulator_side.set_p_gain(0.5)
+        side_correct_movement.regulator_side.set_d_gain(0.1)
+            
+    return True 
+    
+
+
       
 def bomb_korzina():
     global flag
@@ -954,15 +492,16 @@ def bomb_korzina():
     green_mask, green_area = find_contours(image, colors[MY_COLOR_GREEN][0], colors[MY_COLOR_GREEN][1], cv.CHAIN_APPROX_SIMPLE)
     yellow_mask, yellow_area  = find_contours(image, colors[MY_COLOR_YELLOW][0], colors[MY_COLOR_YELLOW][1], cv.CHAIN_APPROX_SIMPLE)
     korzina_mask = green_mask + yellow_mask
-    if not Roma_look_for_picture(korzina_mask):
+    if not Detect_korzina(korzina_mask):
         flag = False
         truba_mask, _ = find_contours(image, colors[MY_COLOR_TRUBA][0], colors[MY_COLOR_TRUBA][1], cv.CHAIN_APPROX_SIMPLE)
         go_by_truba()    
         return False
     if flag == False:
         context.set_speed(-7)
+        context.set_side_speed(0)
         flag = True
-    if stab_on_yellow_circle(korzina_mask):
+    if stab_on_circle(korzina_mask):
         global counter_of_korz
         if green_area > yellow_area:
             counter_of_korz +=1
@@ -970,8 +509,6 @@ def bomb_korzina():
         elif green_area < yellow_area:
             counter_of_korz +=2
             print('yellow')
-        print(counter_of_korz)
-        print(green_area, yellow_area)
         return True
     return False
     
@@ -981,7 +518,7 @@ def go_to_return():
     green_mask, green_area = find_contours(image, colors[MY_COLOR_GREEN][0], colors[MY_COLOR_GREEN][1], cv.CHAIN_APPROX_SIMPLE)
     yellow_mask, yellow_area  = find_contours(image, colors[MY_COLOR_YELLOW][0], colors[MY_COLOR_YELLOW][1], cv.CHAIN_APPROX_SIMPLE)
     korzina_mask = green_mask + yellow_mask
-    if not Roma_look_for_picture(korzina_mask):
+    if not Detect_korzina(korzina_mask):
         flag = False
         truba_mask, _ = find_contours(image, colors[MY_COLOR_TRUBA][0], colors[MY_COLOR_TRUBA][1], cv.CHAIN_APPROX_SIMPLE)
         go_by_truba()    
@@ -989,7 +526,7 @@ def go_to_return():
     if flag == False:
         context.set_speed(-7)
         flag = True
-    if stab_on_yellow_circlenot_bomb(korzina_mask):
+    if stab_on_circle_not_bomb(korzina_mask):
         context.set_yaw(context.get_yaw() + 180)
         return True
     return False
@@ -1006,21 +543,31 @@ def go_by_truba():
             pass
         else:        
             truba_angle = find_rectangle_contour_angle(contour)
-            
-            ((x, _), (_, _), _) = cv.minAreaRect(contour)
-            x_center = (cam_w / 2)
-            x_res = (x_center - x) * 0.8
-            context.set_side_speed(x_res)
-            
-            #context.get_side_speed() + x_res
-            #print(truba_angle)
-            #print(mur.get_yaw())
-            #print("    ")
-            
+            side_correct_movement(contour)
             if not math.isnan(truba_angle):
                 context.set_yaw(mur.get_yaw() + truba_angle)
 
     return True
+
+def go_by_truba_multi():
+    set_spd()
+    for i in range(6):
+        image = mur.get_image_bottom()
+        contours, _ = find_contours(image, colors[MY_COLOR_TRUBA][0], colors[MY_COLOR_TRUBA][1], cv.CHAIN_APPROX_SIMPLE)
+        
+        for contour in contours:
+            tag_area = cv.contourArea(contour)
+        
+            if (tag_area < 100): # исключаем маленькие области
+                pass
+            else:        
+                truba_angle = find_rectangle_contour_angle(contour)
+                side_correct_movement(contour)
+                if not math.isnan(truba_angle):
+                    context.set_yaw(mur.get_yaw() + truba_angle)
+        wait_short_3()
+    return True
+    
     
 def escape():
     
@@ -1029,9 +576,6 @@ def escape():
     
     if counter_of_korz % 2 == 0:  # всплытие по часовой стрелке
         context.set_speed_round(100)
-        
-#    else:
-#        context.set_speed_round(-100)
     else:
         context.set_speed_round(-100)
         
@@ -1045,11 +589,12 @@ def set_spd():
     return True
     
 def set_data():
-    context.set_depth(2.8)
+    context.set_depth(3)
     context.set_yaw(0.0)
     return True
+    
 def chech_deth():
-    if round(mur.get_depth(), 1) == 2.8:
+    if round(mur.get_depth(), 1) == 3:
         return True
     return False
     
@@ -1058,66 +603,39 @@ def chech_deth():
 if __name__ == "__main__":
 
     set_data()
-    ######cv.namedWindow("result")
+
 
     # определим подзадачи, которые требуется решить
     initial_position = (
         chech_deth,
         set_spd,
     )
+    
     main_task = (
-#        bomb_korzina,
-#        set_spd,
-#        go_by_truba,
-#        wait_short_2,
-#        bomb_korzina,
-#        set_spd,
-#        go_by_truba,
-#        wait_short_2,
-#        bomb_korzina,
-#        set_spd,
-#        go_by_truba,
-#        wait_short_2,
-#        bomb_korzina,
-#        set_spd,
-#        go_by_truba,
-#        wait_short_2,
-#        set_spd,
-#        go_by_truba,
-#        wait_short_2,
+        
         bomb_korzina,
-        set_spd,
-        go_by_truba,
-        wait_short_2,
+        go_by_truba_multi,
+        
+        bomb_korzina,
+        go_by_truba_multi,
+        
+        bomb_korzina,
+        go_by_truba_multi,
+        
+        bomb_korzina,
+        go_by_truba_multi,
+        
+        bomb_korzina,
+        go_by_truba_multi,
+        
+        
         go_to_return,
         wait,
-        set_spd,
-        go_by_truba,
-        wait_short_2,
+        go_by_truba_multi,
         go_to_return,
         wait,
-        
-       #     surface_20cm,
-       # turn_to_wall,
-#        wait,
-#        stop,
-#        stabilize,
-#        wait_short,
-#        stop,
-#        wait,
-        #Roma_look_for_picture,
-        #Roma_go_deep,
-        #Roma_stabilize_on_circle,
-        #wait,
-        #go_side,
-        
-       
     )
-
-#    main_task = (
-#
-#    )
-
+    
     finish = (
         stop,
         escape,
