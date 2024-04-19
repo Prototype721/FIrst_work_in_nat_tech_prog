@@ -82,7 +82,7 @@ class PDRegulator(object):
         return output
 
 # функция для поддержания установленного курса робота
-def keep_yaw(yaw_to_set, speed, round0, round1):
+def keep_yaw(yaw_to_set, speed, round0):
     def clamp_angle(angle):
         if angle > 180.0:
             return angle - 360.0
@@ -94,8 +94,12 @@ def keep_yaw(yaw_to_set, speed, round0, round1):
         error = mur.get_yaw() - yaw_to_set
         error = clamp_angle(error)
         output = keep_yaw.yaw_regulator.process(error)
-        mur.set_motor_power(0, clamp(-output + speed + round0, -100, 100))
-        mur.set_motor_power(1, clamp(output + speed + round1, -100, 100))
+        if round0 == 0:
+            mur.set_motor_power(0, clamp(-output + speed, -100, 100))
+            mur.set_motor_power(1, clamp(output + speed, -100, 100))
+        else:
+            mur.set_motor_power(0, clamp(round0, -100, 100))
+            mur.set_motor_power(1, clamp(-round0, -100, 100))
     except AttributeError:
         keep_yaw.yaw_regulator = PDRegulator()
         keep_yaw.yaw_regulator.set_p_gain(0.8)
@@ -152,6 +156,9 @@ class AUVContext(object):
 
     def get_side_speed(self):
         return self._side_speed
+        
+    def get_speed_round(self):
+        return self._round0
 
     def get_auto_stabilization(self):
         return self._auto_stabilization
@@ -168,9 +175,8 @@ class AUVContext(object):
     def set_side_speed(self, value):
         self._side_speed = value
         
-    def set_speed_round(self, val0, val1):
-        self._round0 = val0
-        self._round1 = val1
+    def set_speed_round(self, value):
+        self._round0 = value
         
     def get_stabilization_counter(self):
         return self._stabilization_counter
@@ -211,7 +217,7 @@ class AUVContext(object):
         timestamp = int(round(time.time() * 1000))
         if timestamp - self._timestamp > 16:
             if self._auto_stabilization:
-                keep_yaw(self._yaw, self._speed, self._round0, self._round1)
+                keep_yaw(self._yaw, self._speed, self._round0)
                 keep_depth(self._depth)
                 mur.set_motor_power(4, self._side_speed)
             self._timestamp = timestamp
@@ -664,7 +670,7 @@ def Roma_go_deep():
    
 
 def bomb_korzina():
-    while !Roma_look_for_picture_yellow() or !Roma_look_for_picture_green():
+    while not Roma_look_for_picture_yellow() or not Roma_look_for_picture_green():
         go_by_truba()
         
     if Roma_look_for_picture_green():
@@ -678,7 +684,8 @@ def bomb_korzina():
 
 def go_by_truba():
     image = mur.get_image_bottom()
-    if(contours = find_contours(image, colors[MY_COLOR_TRUBA][0], colors[MY_COLOR_TRUBA][1], cv.CHAIN_APPROX_SIMPLE)):
+    contours = find_contours(image, colors[MY_COLOR_TRUBA][0], colors[MY_COLOR_TRUBA][1], cv.CHAIN_APPROX_SIMPLE)
+    if(contours):
         a = find_rectangle_contour_angle(contours)
         print(a)
         context.set_yaw(a)
@@ -693,10 +700,10 @@ def escape():
     time.sleep(0.05)
     
     if count_of_korzinas_alarms % 2 == 0:  # всплытие по часовой стрелке
-        context.set_speed_round(100, -100)
+        context.set_speed_round(100)
         
     else:
-        context.set_speed_round(-100, 100)
+        context.set_speed_round(-100)
         
     context.set_depth(0)
     
@@ -714,12 +721,15 @@ if __name__ == "__main__":
     # определим подзадачи, которые требуется решить
     initial_position = (
         wait,
+        go_by_truba,
+        wait,
+        wait,
         )
     iinitial_position = (
         wait,
         bomb_korzina,
         go_by_truba,
-        wait_,
+        wait,
         bomb_korzina,
         go_by_truba,
         wait,
@@ -755,7 +765,8 @@ if __name__ == "__main__":
     finish = (
         stop,
         escape,
-        wait_long
+        wait_long,
+        stop
     )
 
     # основная миссия состоит из ранее описанных подзадач
@@ -787,4 +798,4 @@ if __name__ == "__main__":
     context.set_depth(0)
 
     time.sleep(3)
-      
+    
