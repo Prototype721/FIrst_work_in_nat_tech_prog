@@ -27,10 +27,14 @@ colors = {
 }
 
 MY_COLOR_TRUBA = 'purple'
+MY_COLOR_GREEN = 'green'
+MY_COLOR_YELLOW = 'yellow'
 
 # разрешение камер
 cam_w = 320
 cam_h = 240
+
+count_of_korzinas_alarms = 0
 
 # функция для ограничения значения диапазоном
 def clamp(value, min_value, max_value):
@@ -78,7 +82,7 @@ class PDRegulator(object):
         return output
 
 # функция для поддержания установленного курса робота
-def keep_yaw(yaw_to_set, speed):
+def keep_yaw(yaw_to_set, speed, round0, round1):
     def clamp_angle(angle):
         if angle > 180.0:
             return angle - 360.0
@@ -90,8 +94,8 @@ def keep_yaw(yaw_to_set, speed):
         error = mur.get_yaw() - yaw_to_set
         error = clamp_angle(error)
         output = keep_yaw.yaw_regulator.process(error)
-        mur.set_motor_power(0, clamp(-output + speed, -100, 100))
-        mur.set_motor_power(1, clamp(output + speed, -100, 100))
+        mur.set_motor_power(0, clamp(-output + speed + round0, -100, 100))
+        mur.set_motor_power(1, clamp(output + speed + round1, -100, 100))
     except AttributeError:
         keep_yaw.yaw_regulator = PDRegulator()
         keep_yaw.yaw_regulator.set_p_gain(0.8)
@@ -114,6 +118,8 @@ def keep_depth(depth_to_set):
 class AUVContext(object):
     _yaw = 0.0
     _depth = 0.0
+    _round0 = 0.0
+    _round1 = 0.0
     _speed = 0.0
     _side_speed = 0.0
     _timestamp = 0
@@ -161,7 +167,11 @@ class AUVContext(object):
 
     def set_side_speed(self, value):
         self._side_speed = value
-
+        
+    def set_speed_round(self, val0, val1):
+        self._round0 = val0
+        self._round1 = val1
+        
     def get_stabilization_counter(self):
         return self._stabilization_counter
 
@@ -201,7 +211,7 @@ class AUVContext(object):
         timestamp = int(round(time.time() * 1000))
         if timestamp - self._timestamp > 16:
             if self._auto_stabilization:
-                keep_yaw(self._yaw, self._speed)
+                keep_yaw(self._yaw, self._speed, self._round0, self._round1)
                 keep_depth(self._depth)
                 mur.set_motor_power(4, self._side_speed)
             self._timestamp = timestamp
@@ -270,7 +280,43 @@ def detect_arrow_angle(image, contour):
 
 
 # стабилизироваться по точке изображения,
-# здесь координата y - глубина
+# здесь координата y - глубина  _bottom
+def stabilize_x_y_bottom(x, y):
+    y_center = y - (cam_h / 2)
+    x_center = x - (cam_w / 2)
+
+    try:
+        length = math.sqrt(x_center ** 2 + y_center ** 2)
+        if length < 3.5:
+            if context.check_stabilization(timeout=2):
+                #mur.drop()                                                             ---------добавить дроп
+                return True
+        else:
+            context.reset_stabilization_counter()
+
+        output_side = stabilize_x_y.side_regulator.process(x_center)
+        output_depth = stabilize_x_y.depth_regulator.process(y_center)
+
+        output_side = clamp(int(output_side), -50, 50)
+        output_depth = clamp(output_depth, -1, 1)
+
+        context.set_side_speed(-output_side)
+        context.set_depth(mur.get_depth() + output_depth)                              #----------   изменить на движки по  горизонтали (вперед, назад)
+
+    except AttributeError:
+        stabilize_x_y.side_regulator = PDRegulator()
+        stabilize_x_y.side_regulator.set_p_gain(0.5)
+        stabilize_x_y.side_regulator.set_d_gain(0.1)
+
+        stabilize_x_y.depth_regulator = PDRegulator()
+        stabilize_x_y.depth_regulator.set_p_gain(0.01)
+        stabilize_x_y.depth_regulator.set_d_gain(0.01)
+    return False
+    
+        
+
+
+
 def stabilize_x_y(x, y):
     y_center = y - (cam_h / 2)
     x_center = x - (cam_w / 2)
@@ -464,6 +510,55 @@ def Roma_look_for_picture():
 
     return False
 
+def Roma_look_for_picture_yellow():
+    shape, pos = detect_shape(mur.get_image_bottom(),colors['yellow'])
+
+    if shape and abs(cam_w - pos[0]) < 120:
+        stabilize_y(pos[1])
+
+    if shape and abs(cam_w/2 - pos[0]) < 50:
+        if context.shape_counter['shape'] == shape:
+            context.shape_counter['counter'] += 1
+        else:
+            context.shape_counter['counter'] = 0
+
+        context.shape_counter['shape'] = shape
+
+    if context.shape_counter['counter'] >= 15:
+        print('found', shape)
+        context.shape_counter['counter'] = 0
+        if shape == 'circle':
+            Roma_stabilize_on_circle(color)
+            print('circle')
+            return True
+      
+
+    return False
+    
+def Roma_look_for_picture_green():
+    shape, pos = detect_shape(mur.get_image_bottom(),colors['green'])
+
+    if shape and abs(cam_w - pos[0]) < 120:
+        stabilize_y(pos[1])
+
+    if shape and abs(cam_w/2 - pos[0]) < 50:
+        if context.shape_counter['shape'] == shape:
+            context.shape_counter['counter'] += 1
+        else:
+            context.shape_counter['counter'] = 0
+
+        context.shape_counter['shape'] = shape
+
+    if context.shape_counter['counter'] >= 15:
+        print('found', shape)
+        context.shape_counter['counter'] = 0
+        if shape == 'circle':
+            Roma_stabilize_on_circle(color)
+            print('circle')
+            return True
+            
+
+    return False
 ############################################
 
 
@@ -501,12 +596,61 @@ def Roma_stabilize_on_circle():
             #print("area=",area," circle_area=",circle_area," length=",length," circle_length=",circle_length)
             if abs(area/circle_area - 1) < 0.05 and abs(length/circle_length - 1) < 0.05:
                 #print("Found Circle !")
+                return stabilize_x_y_bottom(circle_x, circle_y)
+                
+    return False
+
+def Roma_stabilize_on_circle_yellow():
+    image = mur.get_image_bottom()
+    contours = find_contours(image, colors[MY_COLOR_YELLOW][0], colors[MY_COLOR_YELLOW][1], cv.CHAIN_APPROX_SIMPLE)
+    biggest_shape = None
+    biggest_shape_pos = (0, 0)
+    biggest_area = 0
+    if contours:
+        for contour in contours:
+            area = cv.contourArea(contour)
+            length = cv.arcLength(contour, True)
+
+            if (area < 250):
+                continue
+            
+            (circle_x, circle_y), circle_radius = cv.minEnclosingCircle(contour)
+            circle_area = circle_radius ** 2 * math.pi
+            circle_length = circle_radius * 2 * math.pi
+
+            #print("area=",area," circle_area=",circle_area," length=",length," circle_length=",circle_length)
+            if abs(area/circle_area - 1) < 0.05 and abs(length/circle_length - 1) < 0.05:
+                #print("Found Circle !")
+                return stabilize_x_y_bottom(circle_x, circle_y)
+                
+    return False
+    
+def Roma_stabilize_on_circle_green():
+    image = mur.get_image_bottom()
+    contours = find_contours(image, colors[MY_COLOR_GREEN][0], colors[MY_COLOR_GREEN][1], cv.CHAIN_APPROX_SIMPLE)
+    biggest_shape = None
+    biggest_shape_pos = (0, 0)
+    biggest_area = 0
+    if contours:
+        for contour in contours:
+            area = cv.contourArea(contour)
+            length = cv.arcLength(contour, True)
+
+            if (area < 250):
+                continue
+            
+            (circle_x, circle_y), circle_radius = cv.minEnclosingCircle(contour)
+            circle_area = circle_radius ** 2 * math.pi
+            circle_length = circle_radius * 2 * math.pi
+
+            #print("area=",area," circle_area=",circle_area," length=",length," circle_length=",circle_length)
+            if abs(area/circle_area - 1) < 0.05 and abs(length/circle_length - 1) < 0.05:
+                #print("Found Circle !")
                 return stabilize_x_y(circle_x, circle_y)
     if mur.get_depth() < 2.5:
         d = mur.get_depth() + 0.1
         context.set_depth(d)
     return False
-
 
 
 def Roma_go_deep():
@@ -519,15 +663,46 @@ def Roma_go_deep():
         return True
    
 
+def bomb_korzina():
+    while !Roma_look_for_picture_yellow() or !Roma_look_for_picture_green():
+        go_by_truba()
+        
+    if Roma_look_for_picture_green():
+        ount_of_korzinas_alarms += 1
+        Roma_stabilize_on_circle__green()
+    else: 
+        ount_of_korzinas_alarms += 2
+        Roma_stabilize_on_circle__yellow()
+    return True
+
+
 def go_by_truba():
     image = mur.get_image_bottom()
-    contours = find_contours(image, colors[MY_COLOR_TRUBA][0], colors[MY_COLOR_TRUBA][1], cv.CHAIN_APPROX_SIMPLE)
-    a = find_rectangle_contour_angle(contours)
-    print(a)
-    context.set_yaw(a)
-    context.set_speed(10)
+    if(contours = find_contours(image, colors[MY_COLOR_TRUBA][0], colors[MY_COLOR_TRUBA][1], cv.CHAIN_APPROX_SIMPLE)):
+        a = find_rectangle_contour_angle(contours)
+        print(a)
+        context.set_yaw(a)
+        context.set_speed(10)
+    else:
+        context.set_speed(10)
     return True
-     
+    
+def escape():
+    
+    context.set_speed(0)
+    time.sleep(0.05)
+    
+    if count_of_korzinas_alarms % 2 == 0:  # всплытие по часовой стрелке
+        context.set_speed_round(100, -100)
+        
+    else:
+        context.set_speed_round(-100, 100)
+        
+    context.set_depth(0)
+    
+    
+    return True
+    
 # основной код программы
 if __name__ == "__main__":
 
@@ -537,12 +712,25 @@ if __name__ == "__main__":
     ######cv.namedWindow("result")
 
     # определим подзадачи, которые требуется решить
-
     initial_position = (
         wait,
+        )
+    iinitial_position = (
+        wait,
+        bomb_korzina,
+        go_by_truba,
+        wait_,
+        bomb_korzina,
         go_by_truba,
         wait,
-        go_by_truba
+        bomb_korzina,
+        go_by_truba,
+        wait,
+        bomb_korzina,
+        go_by_truba,
+        wait,
+        bomb_korzina,
+        wait,
        #     surface_20cm,
        # turn_to_wall,
 #        wait,
@@ -565,7 +753,9 @@ if __name__ == "__main__":
     )
 
     finish = (
-
+        stop,
+        escape,
+        wait_long
     )
 
     # основная миссия состоит из ранее описанных подзадач
@@ -583,19 +773,18 @@ if __name__ == "__main__":
     # основной цикл программы, где выполняются все определенные задачи
     while (True):
         mission = context.pop_mission()
-        #print('starting', mission.__name__, '[{}]'.format(context.time))
+        print('starting', mission.__name__, '[{}]'.format(context.time))
         while not mission():
-            #go_by_truba()
             context.process()
             context.time += 1
 
-        #if context.get_missions_length() == 0:
-            #break
+        if context.get_missions_length() == 0:
+            break
 
     print("done!")
 
     context.set_speed(0)
-    context.set_depth(2.5)
+    context.set_depth(0)
 
     time.sleep(3)
-    
+      
